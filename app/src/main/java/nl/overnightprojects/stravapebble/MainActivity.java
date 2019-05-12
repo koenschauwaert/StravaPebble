@@ -1,4 +1,4 @@
-package com.sanyaas.stravapebble;
+package nl.overnightprojects.stravapebble;
 
 import android.app.Activity;
 import android.content.BroadcastReceiver;

@@ -3,7 +3,7 @@ apply plugin: 'com.android.application'
 android {
     compileSdkVersion 28
     defaultConfig {
-        applicationId "com.sanyaas.stravapebble"
+        applicationId "nl.overnightprojects.stravapebble"
         minSdkVersion 21
         targetSdkVersion 28
         versionCode 2

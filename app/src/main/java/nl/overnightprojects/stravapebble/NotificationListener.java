@@ -1,4 +1,4 @@
-package com.sanyaas.stravapebble;
+package nl.overnightprojects.stravapebble;
 
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
