@@ -13,14 +13,20 @@ import com.getpebble.android.kit.Constants;
 import com.getpebble.android.kit.PebbleKit;
 import com.getpebble.android.kit.util.PebbleDictionary;
 
+import java.text.NumberFormat;
+import java.util.Locale;
+
 public class NotificationListener extends NotificationListenerService {
 
     private String TAG = this.getClass().getSimpleName();
     private NLServiceReceiver nlservicereciver;
-    private Boolean pebbleAppStatus = false;
-    private Integer paceSplitStartTime = 0;
-    private Float paceSplitStartDistance = Float.valueOf(0);
-    private String paceSplitPace = "0:00";
+    private boolean pebbleAppStatus = false;
+    private boolean notificationPresent = false;
+    private int paceSplitSeconds = 0;
+    private float paceSplitPrevDist = 0;
+    private String paceSplitPace = "--:--";
+    private StatusBarNotification curSbn = null;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -44,85 +50,112 @@ public class NotificationListener extends NotificationListenerService {
         } else if (sbn.getNotification().actions == null || sbn.getNotification().actions.length == 0) {
             return;
         }
-        Log.i(TAG,"**********  onNotificationPosted");
-        Log.i(TAG,"ID :" + sbn.getId() + "\t" + sbn.getNotification().tickerText + "\t" + sbn.getPackageName());
-        Intent i = new  Intent("com.sanyaas.stravapebble.NOTIFICATION_LISTENER");
-        i.putExtra("notification_event","onNotificationPosted :" + sbn.getPackageName() + "\n");
+//        Log.i(TAG,"**********  onNotificationPosted");
+//        Log.i(TAG,"ID :" + sbn.getId() + "\t" + sbn.getNotification().tickerText + "\t" + sbn.getPackageName());
+//        Log.i(TAG, sbn.getNotification().toString() + " sbn: " + sbn.toString());
+
+        curSbn = sbn;
+        if (!notificationPresent)
+        {
+            // reset memory variables
+            paceSplitSeconds = 0;
+            paceSplitPrevDist = 0;
+            paceSplitPace = "--:--";
+
+            notificationPresent = true;
+            logString("Strava Activity Detected.");
+        }
+
         if(!pebbleAppStatus){
             PebbleKit.startAppOnPebble(getApplicationContext(), Constants.SPORTS_UUID);
-            PebbleDictionary dict = new PebbleDictionary();
-
-            PebbleKit.sendDataToPebble(getApplicationContext(), Constants.SPORTS_UUID, dict);
             pebbleAppStatus = true;
         }
         if ("stop".equalsIgnoreCase(sbn.getNotification().actions[0].title.toString())) {
-            PebbleDictionary dict = new PebbleDictionary();
+            String[] textParts = sbn.getNotification().extras.get("android.title").toString().split(" ");
 
-            String[] text = sbn.getNotification().extras.get("android.title").toString().split(" ");
+            String paceString = paceMonitor(textParts[2],textParts[4]);
 
             // Show a value for duration and distance
-            dict.addString(Constants.SPORTS_TIME_KEY, text[2]);
-            dict.addString(Constants.SPORTS_DISTANCE_KEY, text[4]);
+            PebbleDictionary dict = new PebbleDictionary();
             dict.addUint8(Constants.SPORTS_LABEL_KEY, (byte)Constants.SPORTS_DATA_PACE);
-            dict.addString(Constants.SPORTS_DATA_KEY, paceMonitor(text[2],text[4]));
-
             dict.addUint8(Constants.SPORTS_UNITS_KEY, (byte) Constants.SPORTS_UNITS_METRIC);
-
+            dict.addString(Constants.SPORTS_TIME_KEY, textParts[2]);
+            dict.addString(Constants.SPORTS_DISTANCE_KEY, textParts[4]);
+            dict.addString(Constants.SPORTS_DATA_KEY, paceString);
             PebbleKit.sendDataToPebble(getApplicationContext(), Constants.SPORTS_UUID, dict);
         }
-        sendBroadcast(i);
-
+        super.onNotificationPosted(sbn);
     }
 
-    private String paceMonitor (String time, String distance) {
-        Float dist = Float.parseFloat(distance);
-        Float splitDistance = dist - paceSplitStartDistance;
+    // send some text to display in the android app
+    private void logString(String msg)
+    {
+        Intent i = new  Intent("com.sanyaas.stravapebble.NOTIFICATION_LISTENER");
+        i.putExtra("notification_event", msg);
+        sendBroadcast(i);
+        Log.i(TAG, msg);
+    }
+
+    private String paceMonitor(String time, String distance) {
+        NumberFormat nf = NumberFormat.getInstance(Locale.getDefault());
+
+        float curDist = paceSplitPrevDist;
+        try {
+            curDist = nf.parse(distance).floatValue();
+        }
+        catch (Exception e)
+        {
+            Log.i(TAG, e.getMessage());
+        }
+
+        float splitDistance = curDist - paceSplitPrevDist;
         if (splitDistance > 0) {
             String[] timeSplit = time.split(":");
-            Integer currentTime = (Integer.parseInt(timeSplit[0]) * 60) + Integer.parseInt(timeSplit[1]);
-            Integer secondsPerKM = Math.round((currentTime-paceSplitStartTime)/splitDistance);
-            Integer minutesPart = secondsPerKM/60;
-            Integer secondsPart = secondsPerKM%60;
-            String secondsPartString = secondsPart + "";
-            if (secondsPart < 10) {
-                secondsPartString = "0" + secondsPartString;
+            int parts  = timeSplit.length;
+            int currentSeconds = (Integer.parseInt(timeSplit[parts-2]) * 60) + Integer.parseInt(timeSplit[parts-1]);
+            if (parts > 2)
+            {
+                currentSeconds += Integer.parseInt(timeSplit[parts-3]) * 3600;
             }
-            paceSplitPace = minutesPart + ":" + secondsPartString;
-            paceSplitStartTime = currentTime;
-            paceSplitStartDistance = dist;
-            pebbleAppStatus = false;
+            float paceSeconds = currentSeconds-paceSplitSeconds;
+            int secondsPerKm = Math.round(paceSeconds/splitDistance);
+
+            int minutesPart = secondsPerKm/60;
+            int secondsPart = secondsPerKm%60;
+
+            paceSplitPace = String.format("%02d:%02d", minutesPart, secondsPart);
+            logString("Dist: " + distance + " Pace: " + paceSplitPace);
+            paceSplitSeconds = currentSeconds;
+            paceSplitPrevDist = curDist;
+            pebbleAppStatus = false; // trigger sports display on pebble watch
         }
         return paceSplitPace;
     }
 
     @Override
     public void onNotificationRemoved (StatusBarNotification sbn) {
-        if (!"com.strava".equalsIgnoreCase(sbn.getPackageName())){
-            return;
+        if ("com.strava".equalsIgnoreCase(sbn.getPackageName()))
+        {
+            PebbleKit.closeAppOnPebble(getApplicationContext(), Constants.SPORTS_UUID);
+            pebbleAppStatus = false;
+            notificationPresent = false;
+            curSbn = null;
+            logString("Strava activity ended.");
         }
-        PebbleKit.closeAppOnPebble(getApplicationContext(), Constants.SPORTS_UUID);
-        pebbleAppStatus = false;
     }
 
     class NLServiceReceiver extends BroadcastReceiver{
 
         @Override
         public void onReceive(Context context, Intent intent) {
-            Intent i1 = new  Intent("com.sanyaas.stravapebble.NOTIFICATION_LISTENER");
-            i1.putExtra("notification_event","=====================");
-            sendBroadcast(i1);
+            logString("=====================");
             int i=1;
             for (StatusBarNotification sbn : NotificationListener.this.getActiveNotifications()) {
-                Intent i2 = new  Intent("com.sanyaas.stravapebble.NOTIFICATION_LISTENER");
-                i2.putExtra("notification_event",i +" " + sbn.getPackageName() + "\n");
-                sendBroadcast(i2);
+                logString(i + " " + sbn.getPackageName());
                 i++;
 
             }
-            Intent i3 = new  Intent("com.sanyaas.stravapebble.NOTIFICATION_LISTENER");
-            i3.putExtra("notification_event","===== Notification List ====");
-            sendBroadcast(i3);
-
+            logString("===== Notification List ====");
         }
     }
 
@@ -134,29 +167,20 @@ public class NotificationListener extends NotificationListenerService {
             PebbleKit.sendAckToPebble(getApplicationContext(), id);
 
             Long value = data.getUnsignedIntegerAsLong(Constants.SPORTS_STATE_KEY);
-            if(value != null) {
+            if(value != null && curSbn != null && curSbn.getNotification().actions.length > 0) {
                 int state = value.intValue();
-                if (state == Constants.SPORTS_STATE_PAUSED){
-                    for (StatusBarNotification sbn : NotificationListener.this.getActiveNotifications()) {
-                        if ("com.strava".equalsIgnoreCase(sbn.getPackageName()) && sbn.getNotification().actions.length > 0 && "start".equalsIgnoreCase(sbn.getNotification().actions[0].title.toString())){
-                            try {
-                                sbn.getNotification().actions[0].actionIntent.send();
-                            } catch (PendingIntent.CanceledException e) {
-                                e.printStackTrace();
-                            }
-                            break;
-                        }
-                    }
-                } else {
-                    for (StatusBarNotification sbn : NotificationListener.this.getActiveNotifications()) {
-                        if ("com.strava".equalsIgnoreCase(sbn.getPackageName()) && sbn.getNotification().actions.length > 0 && "stop".equalsIgnoreCase(sbn.getNotification().actions[0].title.toString())){
-                            try {
-                                sbn.getNotification().actions[0].actionIntent.send();
-                            } catch (PendingIntent.CanceledException e) {
-                                e.printStackTrace();
-                            }
-                            break;
-                        }
+
+                boolean doToggle = (state == Constants.SPORTS_STATE_RUNNING && "stop".equalsIgnoreCase(curSbn.getNotification().actions[0].title.toString()))
+                            || (state == Constants.SPORTS_STATE_PAUSED && "start".equalsIgnoreCase(curSbn.getNotification().actions[0].title.toString()));
+
+                // ignore button press if watch state is out of sync with strava
+                if (doToggle) {
+                    try {
+                        curSbn.getNotification().actions[0].actionIntent.send();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        logString("Start/stop failed..");
+                        logString(e.getMessage());
                     }
                 }
             }
